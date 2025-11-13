@@ -17,9 +17,11 @@
   voting-deadline: uint
 })
 (define-data-var next-claim-id uint u1)
+(define-map policy-active-claim {policy-id: uint} {claim-id: uint})
 
 ;; Governance system
 (define-map validators principal {active: bool, stake: uint, reputation: uint})
+(define-map claim-votes {claim-id: uint, validator: principal} {approve: bool})
 (define-data-var min-validator-stake uint u10000000) ;; 10 STX minimum stake
 (define-data-var claim-voting-period uint u144) ;; ~24 hours in blocks
 (define-data-var min-votes-required uint u3)
@@ -116,6 +118,7 @@
                 votes-against: u0,
                 voting-deadline: voting-deadline
               })
+              (map-set policy-active-claim {policy-id: policy-id} {claim-id: claim-id})
               
               (var-set next-claim-id (+ claim-id u1))
               (ok claim-id)))
@@ -130,6 +133,7 @@
       (asserts! (get active validator-info) ERR-NOT-VALIDATOR)
       (asserts! (< stacks-block-height (get voting-deadline claim-info)) ERR-VOTING-PERIOD-ENDED)
       (asserts! (is-eq (get status claim-info) "pending") ERR-VOTING-PERIOD-ENDED)
+      (asserts! (is-none (map-get? claim-votes {claim-id: claim-id, validator: tx-sender})) ERR-ALREADY-VOTED)
       
       ;; Update vote counts
       (let ((new-votes-for (if approve (+ (get votes-for claim-info) u1) (get votes-for claim-info)))
@@ -139,6 +143,7 @@
           votes-for: new-votes-for,
           votes-against: new-votes-against
         }))
+        (map-set claim-votes {claim-id: claim-id, validator: tx-sender} {approve: approve})
         (ok true)))))
 
 ;; Process claim after voting period
@@ -186,10 +191,16 @@
 
 ;; Helper function to check for active claims
 (define-read-only (get-active-claim-for-policy (policy-id uint))
-  (let ((current-claim-id u1))
-    ;; This is simplified - in practice, you'd need to iterate through claims
-    ;; or maintain a separate mapping for policy-id -> claim-id
-    none))
+  (let ((active-claim (map-get? policy-active-claim {policy-id: policy-id})))
+    (match active-claim
+      claim-ref
+        (let ((claim-id (get claim-id claim-ref)))
+          (match (map-get? claims claim-id)
+            claim-record (if (is-eq (get status claim-record) "pending")
+                             (some claim-id)
+                             none)
+            none))
+      none)))
 
 ;; Read-only functions
 (define-read-only (get-pool-balance)
